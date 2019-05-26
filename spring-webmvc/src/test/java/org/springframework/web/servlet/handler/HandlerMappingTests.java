@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2015 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,13 +17,10 @@
 package org.springframework.web.servlet.handler;
 
 import java.io.IOException;
-
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
-import org.hamcrest.Matchers;
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.Mockito;
@@ -35,6 +32,9 @@ import org.springframework.web.context.support.StaticWebApplicationContext;
 import org.springframework.web.servlet.HandlerExecutionChain;
 import org.springframework.web.servlet.HandlerInterceptor;
 import org.springframework.web.servlet.support.WebContentGenerator;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
 
 /**
  * Unit tests for
@@ -56,18 +56,18 @@ public class HandlerMappingTests {
 
 	@Test
 	public void orderedInterceptors() throws Exception {
-		MappedInterceptor firstMappedInterceptor = new MappedInterceptor(new String[]{"/**"}, Mockito.mock(HandlerInterceptor.class));
-		HandlerInterceptor secondHandlerInterceptor = Mockito.mock(HandlerInterceptor.class);
-		MappedInterceptor thirdMappedInterceptor = new MappedInterceptor(new String[]{"/**"}, Mockito.mock(HandlerInterceptor.class));
-		HandlerInterceptor fourthHandlerInterceptor = Mockito.mock(HandlerInterceptor.class);
+		HandlerInterceptor i1 = Mockito.mock(HandlerInterceptor.class);
+		MappedInterceptor mappedInterceptor1 = new MappedInterceptor(new String[]{"/**"}, i1);
+		HandlerInterceptor i2 = Mockito.mock(HandlerInterceptor.class);
+		HandlerInterceptor i3 = Mockito.mock(HandlerInterceptor.class);
+		MappedInterceptor mappedInterceptor3 = new MappedInterceptor(new String[]{"/**"}, i3);
+		HandlerInterceptor i4 = Mockito.mock(HandlerInterceptor.class);
 
-		this.handlerMapping.setInterceptors(new Object[]{firstMappedInterceptor, secondHandlerInterceptor,
-				thirdMappedInterceptor, fourthHandlerInterceptor});
+		this.handlerMapping.setInterceptors(mappedInterceptor1, i2, mappedInterceptor3, i4);
 		this.handlerMapping.setApplicationContext(this.context);
 		HandlerExecutionChain chain = this.handlerMapping.getHandlerExecutionChain(new SimpleHandler(), this.request);
-		Assert.assertThat(chain.getInterceptors(),
-				Matchers.arrayContaining(firstMappedInterceptor.getInterceptor(), secondHandlerInterceptor,
-						thirdMappedInterceptor.getInterceptor(), fourthHandlerInterceptor));
+		assertThat(chain.getInterceptors()).contains(
+				mappedInterceptor1.getInterceptor(), i2, mappedInterceptor3.getInterceptor(), i4);
 	}
 
 	class TestHandlerMapping extends AbstractHandlerMapping {

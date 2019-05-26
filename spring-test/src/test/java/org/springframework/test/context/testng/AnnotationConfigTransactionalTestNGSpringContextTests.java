@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2016 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -38,16 +38,17 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-import static org.springframework.test.transaction.TransactionTestUtils.*;
-import static org.testng.Assert.*;
+import static org.springframework.test.transaction.TransactionAssert.assertThatTransaction;
+import static org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive;
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertNotNull;
 
 /**
  * Integration tests that verify support for
  * {@link org.springframework.context.annotation.Configuration @Configuration} classes
- * with TestNG-based tests.
+ * with transactional TestNG-based tests.
  *
- * <p>
- * Configuration will be loaded from
+ * <p>Configuration will be loaded from
  * {@link AnnotationConfigTransactionalTestNGSpringContextTests.ContextConfiguration}.
  *
  * @author Sam Brannen
@@ -128,15 +129,15 @@ public class AnnotationConfigTransactionalTestNGSpringContextTests
 	@BeforeMethod
 	void setUp() throws Exception {
 		numSetUpCalls++;
-		if (inTransaction()) {
+		if (isActualTransactionActive()) {
 			numSetUpCallsInTransaction++;
 		}
-		assertNumRowsInPersonTable((inTransaction() ? 2 : 1), "before a test method");
+		assertNumRowsInPersonTable((isActualTransactionActive() ? 2 : 1), "before a test method");
 	}
 
 	@Test
 	void modifyTestDataWithinTransaction() {
-		assertInTransaction(true);
+		assertThatTransaction().isActive();
 		assertAddPerson(JANE);
 		assertAddPerson(SUE);
 		assertNumRowsInPersonTable(4, "in modifyTestDataWithinTransaction()");
@@ -145,10 +146,10 @@ public class AnnotationConfigTransactionalTestNGSpringContextTests
 	@AfterMethod
 	void tearDown() throws Exception {
 		numTearDownCalls++;
-		if (inTransaction()) {
+		if (isActualTransactionActive()) {
 			numTearDownCallsInTransaction++;
 		}
-		assertNumRowsInPersonTable((inTransaction() ? 4 : 1), "after a test method");
+		assertNumRowsInPersonTable((isActualTransactionActive() ? 4 : 1), "after a test method");
 	}
 
 	@AfterTransaction

@@ -1,11 +1,11 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2019 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *      https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,112 +16,157 @@
 
 package org.springframework.web.reactive.result.method.annotation;
 
+import java.util.Collections;
 import java.util.List;
-import java.util.Map;
-import java.util.Optional;
 
-import org.springframework.beans.BeanUtils;
-import org.springframework.beans.factory.config.ConfigurableBeanFactory;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+
 import org.springframework.core.MethodParameter;
+import org.springframework.core.ReactiveAdapter;
 import org.springframework.core.ReactiveAdapterRegistry;
-import org.springframework.core.convert.converter.Converter;
+import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.codec.HttpMessageReader;
 import org.springframework.http.codec.multipart.Part;
-import org.springframework.util.Assert;
-import org.springframework.util.MultiValueMap;
-import org.springframework.util.StringUtils;
-import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.http.server.reactive.ServerHttpRequest;
+import org.springframework.http.server.reactive.ServerHttpRequestDecorator;
+import org.springframework.lang.Nullable;
+import org.springframework.util.CollectionUtils;
 import org.springframework.web.bind.annotation.RequestPart;
-import org.springframework.web.bind.annotation.ValueConstants;
+import org.springframework.web.reactive.BindingContext;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.ServerWebInputException;
 
 /**
- * Resolver for method arguments annotated with @{@link RequestPart}.
+ * Resolver for {@code @RequestPart} arguments where the named part is decoded
+ * much like an {@code @RequestBody} argument but based on the content of an
+ * individual part instead. The arguments may be wrapped with a reactive type
+ * for a single value (e.g. Reactor {@code Mono}, RxJava {@code Single}).
  *
- * @author Sebastien Deleuze
+ * <p>This resolver also supports arguments of type {@link Part} which may be
+ * wrapped with are reactive type for a single or multiple values.
+ *
+ * @author Rossen Stoyanchev
  * @since 5.0
- * @see RequestParamMapMethodArgumentResolver
  */
-public class RequestPartMethodArgumentResolver extends AbstractNamedValueSyncArgumentResolver {
+public class RequestPartMethodArgumentResolver extends AbstractMessageReaderArgumentResolver {
 
-	private final boolean useDefaultResolution;
-
-
-	/**
-	 * Class constructor with a default resolution mode flag.
-	 * @param factory a bean factory used for resolving  ${...} placeholder
-	 * and #{...} SpEL expressions in default values, or {@code null} if default
-	 * values are not expected to contain expressions
-	 * @param registry for checking reactive type wrappers
-	 * @param useDefaultResolution in default resolution mode a method argument
-	 * that is a simple type, as defined in {@link BeanUtils#isSimpleProperty},
-	 * is treated as a request parameter even if it isn't annotated, the
-	 * request parameter name is derived from the method parameter name.
-	 */
-	public RequestPartMethodArgumentResolver(
-			ConfigurableBeanFactory factory, ReactiveAdapterRegistry registry, boolean useDefaultResolution) {
-
-		super(factory, registry);
-		this.useDefaultResolution = useDefaultResolution;
+	public RequestPartMethodArgumentResolver(List<HttpMessageReader<?>> readers, ReactiveAdapterRegistry registry) {
+		super(readers, registry);
 	}
 
 
 	@Override
-	public boolean supportsParameter(MethodParameter param) {
-		if (checkAnnotatedParamNoReactiveWrapper(param, RequestPart.class, this::singleParam)) {
-			return true;
-		}
-		else if (this.useDefaultResolution) {
-			return checkParameterTypeNoReactiveWrapper(param, BeanUtils::isSimpleProperty) ||
-					BeanUtils.isSimpleProperty(param.nestedIfOptional().getNestedParameterType());
-		}
-		return false;
-	}
-
-	private boolean singleParam(RequestPart requestParam, Class<?> type) {
-		return !Map.class.isAssignableFrom(type) || StringUtils.hasText(requestParam.name());
+	public boolean supportsParameter(MethodParameter parameter) {
+		return (parameter.hasParameterAnnotation(RequestPart.class) ||
+				checkParameterType(parameter, Part.class::isAssignableFrom));
 	}
 
 	@Override
-	protected NamedValueInfo createNamedValueInfo(MethodParameter parameter) {
-		RequestPart ann = parameter.getParameterAnnotation(RequestPart.class);
-		return (ann != null ? new RequestPartNamedValueInfo(ann) : new RequestPartNamedValueInfo());
-	}
+	public Mono<Object> resolveArgument(
+			MethodParameter parameter, BindingContext bindingContext, ServerWebExchange exchange) {
 
-	@Override
-	protected Optional<Object> resolveNamedValue(String name, MethodParameter parameter,
-			ServerWebExchange exchange) {
+		RequestPart requestPart = parameter.getParameterAnnotation(RequestPart.class);
+		boolean isRequired = (requestPart == null || requestPart.required());
+		String name = getPartName(parameter, requestPart);
 
-		List<?> paramValues = getMultipartData(exchange).get(name);
-		Object result = null;
-		if (paramValues != null) {
-			result = (paramValues.size() == 1 ? paramValues.get(0) : paramValues);
-		}
-		return Optional.ofNullable(result);
-	}
+		Flux<Part> parts = exchange.getMultipartData()
+				.flatMapIterable(map -> {
+					List<Part> list = map.get(name);
+					if (CollectionUtils.isEmpty(list)) {
+						if (isRequired) {
+							throw getMissingPartException(name, parameter);
+						}
+						return Collections.emptyList();
+					}
+					return list;
+				});
 
-	private MultiValueMap<String, Part> getMultipartData(ServerWebExchange exchange) {
-		MultiValueMap<String, Part> params = exchange.getMultipartData().subscribe().peek();
-		Assert.notNull(params, "Expected multipart data (if any) to be parsed.");
-		return params;
-	}
-
-	@Override
-	protected void handleMissingValue(String name, MethodParameter parameter, ServerWebExchange exchange) {
-		String type = parameter.getNestedParameterType().getSimpleName();
-		String reason = "Required " + type + " parameter '" + name + "' is not present";
-		throw new ServerWebInputException(reason, parameter);
-	}
-
-
-	private static class RequestPartNamedValueInfo extends NamedValueInfo {
-
-		RequestPartNamedValueInfo() {
-			super("", false, ValueConstants.DEFAULT_NONE);
+		if (Part.class.isAssignableFrom(parameter.getParameterType())) {
+			return parts.next().cast(Object.class);
 		}
 
-		RequestPartNamedValueInfo(RequestPart annotation) {
-			super(annotation.name(), annotation.required(), ValueConstants.DEFAULT_NONE);
+		if (List.class.isAssignableFrom(parameter.getParameterType())) {
+			MethodParameter elementType = parameter.nested();
+			if (Part.class.isAssignableFrom(elementType.getNestedParameterType())) {
+				return parts.collectList().cast(Object.class);
+			}
+			else {
+				return decodePartValues(parts, elementType, bindingContext, exchange, isRequired)
+						.collectList().cast(Object.class);
+			}
+		}
+
+		ReactiveAdapter adapter = getAdapterRegistry().getAdapter(parameter.getParameterType());
+		if (adapter != null) {
+			// Mono<Part> or Flux<Part>
+			MethodParameter elementType = parameter.nested();
+			if (Part.class.isAssignableFrom(elementType.getNestedParameterType())) {
+				parts = (adapter.isMultiValue() ? parts : parts.take(1));
+				return Mono.just(adapter.fromPublisher(parts));
+			}
+			// We have to decode the content for each part, one at a time
+			if (adapter.isMultiValue()) {
+				return Mono.just(decodePartValues(parts, elementType, bindingContext, exchange, isRequired));
+			}
+		}
+
+		// <T> or Mono<T>
+		return decodePartValues(parts, parameter, bindingContext, exchange, isRequired)
+				.next().cast(Object.class);
+	}
+
+	private String getPartName(MethodParameter methodParam, @Nullable RequestPart requestPart) {
+		String partName = (requestPart != null ? requestPart.name() : "");
+		if (partName.isEmpty()) {
+			partName = methodParam.getParameterName();
+			if (partName == null) {
+				throw new IllegalArgumentException("Request part name for argument type [" +
+						methodParam.getNestedParameterType().getName() +
+						"] not specified, and parameter name information not found in class file either.");
+			}
+		}
+		return partName;
+	}
+
+	private ServerWebInputException getMissingPartException(String name, MethodParameter param) {
+		String reason = "Required request part '" + name + "' is not present";
+		return new ServerWebInputException(reason, param);
+	}
+
+
+	private Flux<?> decodePartValues(Flux<Part> parts, MethodParameter elementType, BindingContext bindingContext,
+			ServerWebExchange exchange, boolean isRequired) {
+
+		return parts.flatMap(part -> {
+			ServerHttpRequest partRequest = new PartServerHttpRequest(exchange.getRequest(), part);
+			ServerWebExchange partExchange = exchange.mutate().request(partRequest).build();
+			if (logger.isDebugEnabled()) {
+				logger.debug(exchange.getLogPrefix() + "Decoding part '" + part.name() + "'");
+			}
+			return readBody(elementType, isRequired, bindingContext, partExchange);
+		});
+	}
+
+
+	private static class PartServerHttpRequest extends ServerHttpRequestDecorator {
+
+		private final Part part;
+
+		public PartServerHttpRequest(ServerHttpRequest delegate, Part part) {
+			super(delegate);
+			this.part = part;
+		}
+
+		@Override
+		public HttpHeaders getHeaders() {
+			return this.part.headers();
+		}
+
+		@Override
+		public Flux<DataBuffer> getBody() {
+			return this.part.content();
 		}
 	}
 
